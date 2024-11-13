@@ -48,18 +48,20 @@ jobs:
       - name: Strip
         if: ${{ matrix.targets.os != 'windows-latest' }}
         continue-on-error: true
-        run: strip target/${{ matrix.targets.target }}/release/rtsp-to-webrtc 2>/dev/null || true
+        run: |
+          find ${{ github.workspace }}/target -type f
+          strip ${{ github.workspace }}/target/${{ matrix.targets.target }}/release/rtsp-to-webrtc 2>/dev/null
 
       - name: Copy dist
         run: |
-          mkdir ../../dist
-          mv target/${{ matrix.targets.target }}/release/rtsp-to-webrtc${{ matrix.targets.ext }} ../../dist/rtsp-to-webrtc-${{ matrix.targets.name }}${{ matrix.targets.ext }}
+          mkdir ${{ github.workspace }}/dist
+          mv ${{ github.workspace }}/target/${{ matrix.targets.target }}/release/rtsp-to-webrtc${{ matrix.targets.ext }} ${{ github.workspace }}/dist/rtsp-to-webrtc-${{ matrix.targets.name }}${{ matrix.targets.ext }}
 
       - name: Save Binaries
         uses: actions/upload-artifact@v4
         with:
           name: rtsp-to-webrtc
-          path: dist/rtsp-to-webrtc*
+          path: ${{ github.workspace }}/dist/rtsp-to-webrtc*
 
   github_release:
     name: Create GitHub release
