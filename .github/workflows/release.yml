@@ -43,17 +43,17 @@ jobs:
         run: cargo install cross
 
       - name: Build rtsp-to-webrtc
-        run: ${{ matrix.targets.tool }} build --target ${{ matrix.targets.target }} --release
+        run: ${{ matrix.targets.tool }} build --target ${{ matrix.targets.target }} --profile deploy
 
       - name: Strip
         if: ${{ matrix.targets.os != 'windows-latest' }}
         continue-on-error: true
-        run: strip ${{ github.workspace }}/target/${{ matrix.targets.target }}/release/rtsp-to-webrtc 2>/dev/null
+        run: strip ${{ github.workspace }}/target/${{ matrix.targets.target }}/deploy/rtsp-to-webrtc 2>/dev/null
 
       - name: Copy dist
         run: |
           mkdir ${{ github.workspace }}/dist
-          mv ${{ github.workspace }}/target/${{ matrix.targets.target }}/release/rtsp-to-webrtc${{ matrix.targets.ext }} ${{ github.workspace }}/dist/rtsp-to-webrtc-${{ matrix.targets.name }}${{ matrix.targets.ext }}
+          mv ${{ github.workspace }}/target/${{ matrix.targets.target }}/deploy/rtsp-to-webrtc${{ matrix.targets.ext }} ${{ github.workspace }}/dist/rtsp-to-webrtc-${{ matrix.targets.name }}${{ matrix.targets.ext }}
 
       - name: Save Binaries
         uses: actions/upload-artifact@v4
