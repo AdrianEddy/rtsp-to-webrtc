@@ -1,7 +1,4 @@
-use async_std::task;
-use clap::{Arg, ArgAction, Command};
-use clustervms::config;
-use clustervms::StreamId;
+use clap::{Arg, Command};
 use core::time::Duration;
 use futures::StreamExt;
 use retina::client::PacketItem;
@@ -12,9 +9,9 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tracing::{error, info_span, Instrument};
-use webrtc::api::media_engine::{MIME_TYPE_H264};
+use webrtc::api::media_engine::*;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
-use webrtc::track::track_local::{TrackLocalWriter};
+use webrtc::track::track_local::TrackLocalWriter;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 
 #[macro_use] extern crate rocket;
@@ -23,7 +20,7 @@ mod common;
 mod rest_api;
 mod webrtc_utils;
 
-use crate::common::VideoTrackMap;
+use crate::common::TrackMap;
 
 // Since the UI is served by another server, we may need to setup CORS to allow the UI to make requests to this server.
 pub struct CORS;
@@ -55,13 +52,6 @@ async fn main() -> anyhow::Result<()> {
 		.author("Alicrow")
 		.about("Forwards an RTSP stream as a WebRTC stream.")
 		.arg(
-			Arg::new("config")
-				.action(ArgAction::Append)	// Allow argument to be specified multiple times
-				.short('c')
-				.long("config")
-				.help("TOML file with ClusterVMS config")
-		)
-		.arg(
 			Arg::new("FULLHELP")
 				.help("Prints more detailed help information")
 				.long("fullhelp"),
@@ -90,44 +80,10 @@ async fn main() -> anyhow::Result<()> {
 		.with_max_level(log_level)
 		.init();
 
-	let mut config_manager = config::ConfigManager::new();
-
-	let config_filename_matches = matches.get_many::<String>("config");
-	match config_filename_matches {
-		Some(filenames) => {
-			config_manager.read_config(filenames.map(|v| v.as_str()).collect())?;
-		},
-		None => {
-			// Use default file path
-			config_manager.read_default_config_files()?;
-		}
-	};
-
-	let mut video_tracks = VideoTrackMap::new();
-
-	for (camera_id, camera_info) in &config_manager.get_config().cameras {
-		let mut streams_for_camera = HashMap::<StreamId, Arc<TrackLocalStaticRTP>>::new();
-		for (stream_id, stream_info) in &camera_info.streams {
-			let stream_settings = common::StreamSettings {
-				username: camera_info.username.clone().unwrap_or_default().clone(),
-				password: camera_info.password.clone().unwrap_or_default().clone(),
-				source_url: stream_info.source_url.clone(),
-			};
-			match create_video_track(stream_settings).instrument(info_span!("create_video_track", camera_id, stream_id)).await {
-				Ok(video_track) => {
-					streams_for_camera.insert(stream_id.clone(), video_track.clone());
-				}
-				Err(e) => {
-					error!("Could not create track for camera {camera_id} stream {stream_id} video stream due to error: {e:?}");
-					// TODO: keep trying periodically
-				}
-			}
-		}
-		video_tracks.insert(camera_id.clone(), streams_for_camera);
-	}
+	let tracks = TrackMap::new(HashMap::new());
 
 	let _rocket = rocket::build()
-		.attach(rest_api::stage(video_tracks))
+		.attach(rest_api::stage(tracks))
 		.attach(CORS)
 		.launch()
 		.await?;
@@ -135,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
 	anyhow::Ok(())
 }
 
-async fn create_video_track(stream_settings: common::StreamSettings) -> anyhow::Result<Arc<TrackLocalStaticRTP>> {
+pub async fn create_tracks(stream_settings: common::StreamSettings) -> anyhow::Result<(Arc<TrackLocalStaticRTP>, Arc<TrackLocalStaticRTP>)> {
 	// Create Track that we send video back to client on
 	let video_track = Arc::new(TrackLocalStaticRTP::new(
 		RTCRtpCodecCapability {
@@ -145,24 +101,48 @@ async fn create_video_track(stream_settings: common::StreamSettings) -> anyhow::
 		"video".to_owned(),
 		"webrtc-rs".to_owned(),
 	));
+	let audio_track = Arc::new(TrackLocalStaticRTP::new(
+		RTCRtpCodecCapability {
+			mime_type: MIME_TYPE_PCMA.to_owned(),
+			..Default::default()
+		},
+		"audio".to_owned(),
+		"webrtc-rs".to_owned(),
+	));
 
 	// Set up RTSP connection to camera
 
 	let video_track_clone = video_track.clone();
+	let audio_track_clone = audio_track.clone();
 
 	// Thread that reads from the input stream and writes packets to the output streams
 	tokio::spawn(async move {
 		loop {
+			let mut video_i = None;
+			let mut audio_i = None;
 			let session_options = retina::client::SessionOptions::default().creds(Some(retina::client::Credentials {username: stream_settings.username.clone(), password: stream_settings.password.clone()}) );
 			let session = match retina::client::Session::describe(stream_settings.source_url.clone(), session_options).await {
 				Ok(mut session) => {
-					let video_i = session
-						.streams()
-						.iter()
+					video_i = Some(
+						session.streams().iter()
 						.position(|s| s.media() == "video" && s.encoding_name() == "h264")
-						.ok_or_else(|| error!("Could not find H.264 video stream")).unwrap();
-					match session.setup(video_i, retina::client::SetupOptions::default()).await {
-						Ok(_) => session.play(retina::client::PlayOptions::default()).await,
+						.ok_or_else(|| error!("Could not find H.264 video stream")).unwrap()
+					);
+					audio_i = Some(
+						session.streams().iter()
+						.position(|s| s.media() == "audio" && s.encoding_name() == "pcma")
+						.ok_or_else(|| error!("Could not find PCM audio stream")).unwrap()
+					);
+					match session.setup(video_i.unwrap(), retina::client::SetupOptions::default()).await {
+						Ok(_) => {
+							match session.setup(audio_i.unwrap(), retina::client::SetupOptions::default()).await {
+								Ok(_) => { }
+								Err(e) => {
+									error!("Failed to setup audio track: {audio_i:?}: {e:?}");
+								}
+							}
+							session.play(retina::client::PlayOptions::default()).await
+						}
 						Err(e) => Err(e)
 					}
 				}
@@ -185,13 +165,26 @@ async fn create_video_track(stream_settings: common::StreamSettings) -> anyhow::
 							}
 							Some(Ok(PacketItem::Rtp(packet))) => {
 								let raw_rtp = packet.raw();
-								if let Err(err) = video_track_clone.write(&raw_rtp).await {
-									if webrtc::Error::ErrClosedPipe == err {
-										// The peerConnection has been closed.
-										// FIXME: when would this even occur?
-									} else {
-										error!("video_track write err: {}", err);
+								if packet.stream_id() == video_i.unwrap() {
+									if let Err(err) = video_track_clone.write(&raw_rtp).await {
+										if webrtc::Error::ErrClosedPipe == err {
+											// The peerConnection has been closed.
+											// FIXME: when would this even occur?
+										} else {
+											error!("video_track write err: {}", err);
+										}
 									}
+								} else if packet.stream_id() == audio_i.unwrap() {
+									if let Err(err) = audio_track_clone.write(&raw_rtp).await {
+										if webrtc::Error::ErrClosedPipe == err {
+											// The peerConnection has been closed.
+											// FIXME: when would this even occur?
+										} else {
+											error!("audio_track write err: {}", err);
+										}
+									}
+								} else {
+									error!("Unknown stream ID: {}", packet.stream_id());
 								}
 							}
 							Some(Ok(PacketItem::Rtcp(_))) => {
@@ -210,9 +203,9 @@ async fn create_video_track(stream_settings: common::StreamSettings) -> anyhow::
 
 			// Sleep for a bit after getting disconnected or failing to connect.
 			// If the issue persists, we don't want to waste all our time constantly trying to reconnect.
-			task::sleep(Duration::from_secs(1)).await;
+			tokio::time::sleep(Duration::from_secs(1)).await;
 		}
 	}.instrument(info_span!("read_loop")));
 
-	Ok(video_track)
+	Ok((video_track, audio_track))
 }

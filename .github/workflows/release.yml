@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    #tags: [ 'v*' ]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        targets: [
+          { os: ubuntu-latest,  target: x86_64-unknown-linux-musl,    tool: cargo, name: linux-x86_64,    ext: '' },
+          { os: ubuntu-latest,  target: i686-unknown-linux-musl,      tool: cross, name: linux-i686,      ext: '' },
+          { os: ubuntu-latest,  target: aarch64-unknown-linux-musl,   tool: cross, name: linux-aarch64,   ext: '' },
+          { os: ubuntu-latest,  target: armv7-unknown-linux-musleabi, tool: cross, name: linux-armv7,     ext: '' },
+          { os: macos-latest,   target: x86_64-apple-darwin,          tool: cargo, name: mac-x86_64,      ext: '' },
+          { os: macos-latest,   target: aarch64-apple-darwin,         tool: cross, name: mac-aarch64,     ext: '' },
+          { os: windows-latest, target: x86_64-pc-windows-msvc,       tool: cargo, name: windows-x86_64,  ext: '.exe' },
+          { os: windows-latest, target: i686-pc-windows-msvc,         tool: cargo, name: windows-i686,    ext: '.exe' },
+          { os: windows-latest, target: aarch64-pc-windows-msvc,      tool: cargo, name: windows-aarch64, ext: '.exe' }
+      ]
+    runs-on: ${{ matrix.targets.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: "${{ matrix.targets.target }}"
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Add rust target
+        run: rustup target add ${{ matrix.targets.target }}
+
+      - name: Setup target ${{ matrix.targets.target }}
+        if: ${{ matrix.targets.target == 'aarch64-apple-darwin' }}
+        run: |
+          echo "SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.1 --show-sdk-platform-version)" >> $GITHUB_ENV
+
+      - name: Install cross
+        if: ${{ matrix.targets.tool == 'cross' }}
+        run: cargo install cross
+
+      - name: Build rtsp-to-webrtc
+        run: ${{ matrix.targets.tool }} build --target ${{ matrix.targets.target }} --release
+
+      - name: Strip
+        if: ${{ matrix.targets.os != 'windows-latest' }}
+        continue-on-error: true
+        run: strip target/${{ matrix.targets.target }}/release/rtsp-to-webrtc 2>/dev/null || true
+
+      - name: Copy dist
+        run: |
+          mkdir ../../dist
+          mv target/${{ matrix.targets.target }}/release/rtsp-to-webrtc${{ matrix.targets.ext }} ../../dist/rtsp-to-webrtc-${{ matrix.targets.name }}${{ matrix.targets.ext }}
+
+      - name: Save Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtsp-to-webrtc
+          path: dist/rtsp-to-webrtc*
+
+  github_release:
+    name: Create GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rtsp-to-webrtc
+
+      - run: ls -l
+
+      - name: Publish
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+         files: ./*
+

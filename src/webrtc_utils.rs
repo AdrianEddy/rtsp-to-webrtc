@@ -14,7 +14,7 @@ use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 
 
 
-pub async fn create_answer(offer: RTCSessionDescription, video_track: Arc<TrackLocalStaticRTP>) -> anyhow::Result<RTCSessionDescription> {
+pub async fn create_answer(offer: RTCSessionDescription, video_track: Arc<TrackLocalStaticRTP>, audio_track: Arc<TrackLocalStaticRTP>) -> anyhow::Result<RTCSessionDescription> {
 	// Create a MediaEngine object to configure the supported codec
 	let mut m = MediaEngine::default();
 
@@ -51,6 +51,9 @@ pub async fn create_answer(offer: RTCSessionDescription, video_track: Arc<TrackL
 	let rtp_sender = peer_connection
 		.add_track(video_track)
 		.await?;
+	let rtp_sender_a = peer_connection
+		.add_track(audio_track)
+		.await?;
 
 	// Channel to send a signal when the client gets disconnected so we can clean up
 	let (disconnected_tx, mut disconnected_rx) = tokio::sync::mpsc::channel::<()>(1);
@@ -58,6 +61,7 @@ pub async fn create_answer(offer: RTCSessionDescription, video_track: Arc<TrackL
 	// Task to read data from the client
 	tokio::spawn(async move {
 		let mut rtcp_buf = vec![0u8; 1500];
+		let mut rtcp_buf_a = vec![0u8; 1500];
 		let disconnected_fut = disconnected_rx.recv().fuse();
 		pin_mut!(disconnected_fut);
 		loop {
@@ -65,16 +69,21 @@ pub async fn create_answer(offer: RTCSessionDescription, video_track: Arc<TrackL
 			// Before these packets are returned they are processed by interceptors.
 			// For things like NACK this needs to be called.
 			let recv_rtcp_fut = rtp_sender.read(&mut rtcp_buf).fuse();
-
 			pin_mut!(recv_rtcp_fut);
+
+			let recv_rtcp_fut_a = rtp_sender_a.read(&mut rtcp_buf_a).fuse();
+			pin_mut!(recv_rtcp_fut_a);
+
 			select! {
 				_ = disconnected_fut => {
 					info!("Client is disconnected; cleaning up RTP sender");
-					rtp_sender.stop().await;
+					let _ = rtp_sender.stop().await;
+					let _ = rtp_sender_a.stop().await;
 					break;
 				},
 				// Nothing to actually do with the RTCP packets, but we're supposed to read them, anyway
 				_ = recv_rtcp_fut => {}
+				_ = recv_rtcp_fut_a => {}
 			}
 		}
 		anyhow::Result::<()>::Ok(())
