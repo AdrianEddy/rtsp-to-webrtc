@@ -2,25 +2,26 @@
 
 Converts an RTSP stream from an IP camera to a WebRTC stream.
 
-Uses a slight variation of WebRTC-HTTP Ingestion Protocol (WHIP) to exchange SDP offers and answers (WHIP has the client streaming to the server, while we have the server stream to the client).
+It allows to provide an arbitrary rtsp url and it immediately responds with WebRTC stream. It is designed to not require any config. Simply send the WebRTC SDP offer and RTSP url in a simple POST request (see [example.html](https://github.com/AdrianEddy/rtsp-to-webrtc/blob/main/example.html)) and that's it
 
-This application is primarily intended for use with ClusterVMS, but can also be used stand-alone.
-
-
+This repository builds the binaries for most major systems and architectures on GitHub actions. You can download binaries directly from the [Actions](https://github.com/AdrianEddy/rtsp-to-webrtc/actions) page
 
 ## Usage
 
-* Either build the docker container, or build locally with `cargo build --release`. Building in release mode is HIGHLY recommended, as performance is MUCH worse under debug mode.
-* Create TOML files describing the cameras and streams you want forwarded. See `sample-config.toml` for format example.
-	* When sharing config files between several ClusterVMS components, it's recommended to keep the login details and other sensitive config in separate files, accessible only to the applications that need them.
-* Run the executable, pointing it to your config files
-	* E.g. `./rtsp-to-webrtc -c my-config.toml -c my-secret-config.toml`
+* Download the binary from the [Actions](https://github.com/AdrianEddy/rtsp-to-webrtc/actions) page or build yourself
+	* You can build the docker container, or build locally with `cargo build --release`. Building in release mode is HIGHLY recommended, as performance is MUCH worse under debug mode.
+* Run the executable
+	* E.g. `./rtsp-to-webrtc`
 * If using containers, forward port 8000
 * Open `example.html` in your browser on the same machine
+
+If you want to customize the address or port, you can use `Rocket.toml` config file or environment variables. Refer to the [Rocket docs](https://rocket.rs/guide/v0.5/configuration/)
 
 
 
 ## License
+
+#### This is a fork of [ClusterVMS/rtsp-to-webrtc](https://github.com/ClusterVMS/rtsp-to-webrtc). The main difference is that this fork has removed the configuration files and added support for audio streams
 
 Licensed under either of the Apache License, Version 2.0 or the MIT License at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this crate by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
